@@ -1,0 +1,35 @@
+# Binarios compilados
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+ollama-tui
+
+# Archivos de prueba
+*.test
+*.tmp
+
+# Archivos de salida de cobertura
+*.out
+*.prof
+
+# Dependencias
+/vendor/
+
+# Archivos de IDE y editores
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Archivos de sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos de Go
+/go.sum
+
+# Archivos de log
+*.log
