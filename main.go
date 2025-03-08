@@ -74,17 +74,23 @@ const (
 )
 
 type mainModel struct {
-	state           int
-	list            list.Model
-	models          []Model
-	selectedModel   string
-	input           textarea.Model
-	viewport        viewport.Model
-	spinner         spinner.Model
-	responses       []string
-	currentPrompt   string
-	currentResponse string
-	err             error
+	state              int
+	list               list.Model
+	models             []Model
+	selectedModel      string
+	input              textarea.Model
+	viewport           viewport.Model
+	spinner            spinner.Model
+	responses          []string
+	currentPrompt      string
+	currentResponse    string
+	err                error
+	inProgressResponse string // Para acumular tokens a medida que llegan
+	isGenerating       bool
+}
+
+type tokenMsg struct {
+	token string
 }
 
 func initialModel() mainModel {
@@ -110,11 +116,14 @@ func initialModel() mainModel {
 	vp.SetContent("Respuestas aparecerán aquí.\n\n")
 
 	return mainModel{
-		state:    stateModelSelect,
-		list:     l,
-		spinner:  s,
-		input:    ta,
-		viewport: vp,
+		state:              stateModelSelect,
+		list:               l,
+		spinner:            s,
+		input:              ta,
+		viewport:           vp,
+		responses:          []string{},
+		inProgressResponse: "",
+		isGenerating:       false,
 	}
 }
 
@@ -141,11 +150,18 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.state = statePrompting
 					return m, nil
 				}
-			} else if m.state == statePrompting {
+			}
+			if m.state == statePrompting {
 				if strings.TrimSpace(m.input.Value()) != "" {
 					m.currentPrompt = m.input.Value()
 					m.input.Reset()
 					m.state = stateLoading
+					m.isGenerating = true
+					m.inProgressResponse = ""
+
+					// Preparamos una nueva respuesta vacía
+					m.responses = append(m.responses, fmt.Sprintf("Prompt: %s\n\nResponse:\n", m.currentPrompt))
+
 					return m, generateResponse(m.selectedModel, m.currentPrompt)
 				}
 			}
@@ -163,27 +179,27 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.models = msg.models
 		return m, nil
 
+	case tokenMsg:
+		// Agregamos el token a la respuesta en curso
+		m.inProgressResponse += msg.token
+
+		// Actualizamos la visualización
+		if len(m.responses) > 0 {
+			// Actualizamos la última respuesta con lo que tenemos hasta ahora
+			m.responses[len(m.responses)-1] = fmt.Sprintf("Prompt: %s\n\nResponse:\n%s", m.currentPrompt, m.inProgressResponse)
+		} else {
+			// Si no hay respuestas previas, creamos una nueva
+			m.responses = append(m.responses, fmt.Sprintf("Prompt: %s\n\nResponse:\n%s", m.currentPrompt, m.inProgressResponse))
+		}
+
+		// Seguimos esperando más tokens
+		return m, generateResponse(m.selectedModel, m.currentPrompt)
+
 	case generatedResponseMsg:
-		m.currentResponse = msg.response
-		newEntry := fmt.Sprintf("Prompt: %s\n\nResponse:\n%s\n\n---\n", m.currentPrompt, m.currentResponse)
-		m.responses = append(m.responses, newEntry)
-
-		// Imprimir para depuración
-		fmt.Printf("Recibida respuesta de longitud: %d\n", len(m.currentResponse))
-		fmt.Printf("Nueva entrada: %s\n", newEntry)
-
-		// Actualizar contenido del viewport
-		content := strings.Join(m.responses, "\n")
-
-		// Forzar la actualización del viewport
-		m.viewport = viewport.New(m.viewport.Width, m.viewport.Height)
-		m.viewport.Style = responseStyle
-		m.viewport.SetContent(content)
-		m.viewport.GotoBottom()
-
-		// Debug
-		fmt.Printf("Viewport content length: %d\n", len(content))
-
+		// Cuando recibimos el mensaje de finalización, guardamos la respuesta completa
+		m.currentResponse = m.inProgressResponse
+		m.inProgressResponse = ""
+		m.isGenerating = false
 		m.state = statePrompting
 		return m, nil
 
@@ -243,27 +259,33 @@ func (m mainModel) View() string {
 	case stateModelSelect:
 		return m.list.View()
 
-	case statePrompting:
+	case statePrompting, stateLoading:
 		var sb strings.Builder
 		sb.WriteString(titleStyle.Render(fmt.Sprintf("Chat with %s", m.selectedModel)))
 		sb.WriteString("\n\n")
 
-		// Simplemente mostrar la última respuesta si existe
+		// Mostrar historial de conversación
 		if len(m.responses) > 0 {
-			lastResponse := m.responses[len(m.responses)-1]
-			sb.WriteString(responseStyle.Render(lastResponse))
+			// Mostramos todas las respuestas, incluida la que está en progreso
+			for _, resp := range m.responses {
+				sb.WriteString(responseStyle.Render(resp))
+				sb.WriteString("\n\n")
+			}
 		} else {
 			sb.WriteString(responseStyle.Render("No responses yet. Send a prompt to start."))
+			sb.WriteString("\n\n")
 		}
 
-		sb.WriteString("\n\n")
+		// Si estamos generando, mostramos un indicador
+		if m.state == stateLoading && !m.isGenerating {
+			sb.WriteString(fmt.Sprintf("  %s Thinking...\n\n", m.spinner.View()))
+		}
+
+		// Colocamos la entrada al final
 		sb.WriteString(m.input.View())
 		sb.WriteString("\n\n")
 		sb.WriteString(statusBarStyle.Render(fmt.Sprintf(" %s | Ctrl+C to exit ", m.selectedModel)))
 		return sb.String()
-
-	case stateLoading:
-		return fmt.Sprintf("\n\n  %s Model is thinking...\n\n", m.spinner.View())
 
 	default:
 		return "Unknown state"
@@ -297,8 +319,6 @@ func fetchModels() tea.Cmd {
 
 func generateResponse(model, prompt string) tea.Cmd {
 	return func() tea.Msg {
-		fmt.Printf("Enviando prompt a %s: %s\n", model, prompt)
-
 		reqBody, err := json.Marshal(GenerateRequest{
 			Model:  model,
 			Prompt: prompt,
@@ -313,36 +333,32 @@ func generateResponse(model, prompt string) tea.Cmd {
 		}
 		defer resp.Body.Close()
 
-		fmt.Printf("Status: %s\n", resp.Status)
-
-		var fullResponse strings.Builder
-		linesProcessed := 0
-
+		// En lugar de acumular toda la respuesta, enviamos los tokens a medida que llegan
 		scanner := bufio.NewScanner(resp.Body)
-		// Aumentar el buffer del scanner para manejar líneas más largas
 		const maxCapacity = 1024 * 1024
 		buf := make([]byte, maxCapacity)
 		scanner.Buffer(buf, maxCapacity)
 
 		for scanner.Scan() {
 			line := scanner.Text()
-			linesProcessed++
-
 			if line == "" {
 				continue
 			}
 
 			var genResp GenerateResponse
 			if err := json.Unmarshal([]byte(line), &genResp); err != nil {
-				fmt.Printf("Error en línea %d: %v\n", linesProcessed, err)
+				fmt.Printf("Error en línea: %v\n", err)
 				continue
 			}
 
-			fullResponse.WriteString(genResp.Response)
-			fmt.Printf("Chunk %d: %s\n", linesProcessed, genResp.Response)
+			// Si recibimos contenido, enviamos inmediatamente el token
+			if genResp.Response != "" {
+				return tokenMsg{token: genResp.Response}
+			}
 
+			// Si hemos terminado, enviamos un mensaje de finalización
 			if genResp.Done {
-				break
+				return generatedResponseMsg{response: ""}
 			}
 		}
 
@@ -350,14 +366,7 @@ func generateResponse(model, prompt string) tea.Cmd {
 			return errorMsg{fmt.Errorf("error leyendo respuesta: %v", err)}
 		}
 
-		result := fullResponse.String()
-		fmt.Printf("Respuesta completa (%d bytes): %s\n", len(result), result)
-
-		if result == "" {
-			return errorMsg{fmt.Errorf("respuesta vacía recibida de Ollama")}
-		}
-
-		return generatedResponseMsg{response: result}
+		return generatedResponseMsg{response: ""}
 	}
 }
 
