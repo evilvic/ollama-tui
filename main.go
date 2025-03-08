@@ -3,11 +3,13 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/charmbracelet/bubbles/list"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -45,6 +47,7 @@ type ModelListResponse struct {
 type GenerateRequest struct {
 	Model  string `json:"model"`
 	Prompt string `json:"prompt"`
+	Stream bool   `json:"stream"`
 }
 
 type GenerateResponse struct {
@@ -65,7 +68,10 @@ func (i item) FilterValue() string { return i.name }
 
 type fetchModelsMsg struct{ models []Model }
 type errorMsg struct{ err error }
-type generatedResponseMsg struct{ response string }
+type tokenMsg struct {
+	token string
+	done  bool
+}
 
 const (
 	stateModelSelect = iota
@@ -87,10 +93,8 @@ type mainModel struct {
 	err                error
 	inProgressResponse string // Para acumular tokens a medida que llegan
 	isGenerating       bool
-}
-
-type tokenMsg struct {
-	token string
+	// Variable para manejar la cancelación de generación
+	cancelGenerate context.CancelFunc
 }
 
 func initialModel() mainModel {
@@ -141,6 +145,10 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
+			// Si estamos generando, cancela la generación
+			if m.isGenerating && m.cancelGenerate != nil {
+				m.cancelGenerate()
+			}
 			return m, tea.Quit
 
 		case "enter":
@@ -153,6 +161,11 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.state == statePrompting {
 				if strings.TrimSpace(m.input.Value()) != "" {
+					// Si ya estamos generando, cancela la generación anterior
+					if m.isGenerating && m.cancelGenerate != nil {
+						m.cancelGenerate()
+					}
+
 					m.currentPrompt = m.input.Value()
 					m.input.Reset()
 					m.state = stateLoading
@@ -162,10 +175,15 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// Preparamos una nueva respuesta vacía
 					m.responses = append(m.responses, fmt.Sprintf("Prompt: %s\n\nResponse:\n", m.currentPrompt))
 
-					return m, generateResponse(m.selectedModel, m.currentPrompt)
+					return m, startGenerateResponse(m.selectedModel, m.currentPrompt)
 				}
 			}
 		}
+
+	case setCancelFuncMsg:
+		// Guardamos la función de cancelación
+		m.cancelGenerate = msg.cancel
+		return m, nil
 
 	case fetchModelsMsg:
 		items := []list.Item{}
@@ -180,6 +198,11 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tokenMsg:
+		// Si el mensaje es de finalización y no estamos generando, ignorarlo
+		if msg.done && !m.isGenerating {
+			return m, nil
+		}
+
 		// Agregamos el token a la respuesta en curso
 		m.inProgressResponse += msg.token
 
@@ -187,25 +210,27 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.responses) > 0 {
 			// Actualizamos la última respuesta con lo que tenemos hasta ahora
 			m.responses[len(m.responses)-1] = fmt.Sprintf("Prompt: %s\n\nResponse:\n%s", m.currentPrompt, m.inProgressResponse)
-		} else {
-			// Si no hay respuestas previas, creamos una nueva
-			m.responses = append(m.responses, fmt.Sprintf("Prompt: %s\n\nResponse:\n%s", m.currentPrompt, m.inProgressResponse))
 		}
 
-		// Seguimos esperando más tokens
-		return m, generateResponse(m.selectedModel, m.currentPrompt)
+		// Verificamos si hemos terminado
+		if msg.done {
+			m.currentResponse = m.inProgressResponse
+			m.isGenerating = false
+			m.state = statePrompting
+			// Limpiamos la cancelación
+			m.cancelGenerate = nil
+			return m, nil
+		}
 
-	case generatedResponseMsg:
-		// Cuando recibimos el mensaje de finalización, guardamos la respuesta completa
-		m.currentResponse = m.inProgressResponse
-		m.inProgressResponse = ""
-		m.isGenerating = false
-		m.state = statePrompting
-		return m, nil
+		// Seguimos escuchando más tokens
+		return m, listenForTokens()
 
 	case errorMsg:
 		m.err = msg.err
+		m.isGenerating = false
 		m.state = statePrompting
+		// Limpiamos la cancelación
+		m.cancelGenerate = nil
 		return m, nil
 
 	case tea.WindowSizeMsg:
@@ -224,8 +249,6 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				viewportHeight = 1
 			}
 			m.viewport.Height = viewportHeight
-
-			fmt.Printf("Viewport dimensions: %dx%d\n", m.viewport.Width, m.viewport.Height)
 		}
 		return m, nil
 
@@ -253,7 +276,6 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
-// Alternativa: en lugar de usar viewport, simplemente mostramos la última respuesta
 func (m mainModel) View() string {
 	switch m.state {
 	case stateModelSelect:
@@ -317,29 +339,98 @@ func fetchModels() tea.Cmd {
 	}
 }
 
-func generateResponse(model, prompt string) tea.Cmd {
+// Usamos un canal para comunicar los tokens desde la goroutine a nuestro programa
+var tokenChan chan tokenMsg
+
+// Inicializamos el canal en la función main
+func init() {
+	tokenChan = make(chan tokenMsg, 100) // Buffer para evitar bloqueos
+}
+
+// Mensaje para establecer la función de cancelación
+type setCancelFuncMsg struct {
+	cancel context.CancelFunc
+}
+
+// Comando que escucha en el canal de tokens
+func listenForTokens() tea.Cmd {
 	return func() tea.Msg {
-		reqBody, err := json.Marshal(GenerateRequest{
-			Model:  model,
-			Prompt: prompt,
+		return <-tokenChan
+	}
+}
+
+// Empezamos la generación en una goroutine separada para evitar bloqueos
+func startGenerateResponse(model, prompt string) tea.Cmd {
+	return func() tea.Msg {
+		// Creamos un contexto cancelable
+		ctx, cancel := context.WithCancel(context.Background())
+
+		// Guardamos la función de cancelación en un comando separado
+		cmds := []tea.Cmd{
+			func() tea.Msg {
+				return setCancelFuncMsg{cancel: cancel}
+			},
+		}
+
+		// Iniciamos la generación en una goroutine
+		go generateResponseAsync(ctx, model, prompt, func(token string, done bool) {
+			// Enviamos tokens al canal
+			tokenChan <- tokenMsg{token: token, done: done}
 		})
-		if err != nil {
-			return errorMsg{err}
-		}
 
-		resp, err := http.Post(ollamaURL+"/api/generate", "application/json", bytes.NewBuffer(reqBody))
-		if err != nil {
-			return errorMsg{err}
-		}
-		defer resp.Body.Close()
+		// Devolvemos un batch de comandos
+		cmds = append(cmds, listenForTokens())
+		return tea.Batch(cmds...)()
+	}
+}
 
-		// En lugar de acumular toda la respuesta, enviamos los tokens a medida que llegan
-		scanner := bufio.NewScanner(resp.Body)
-		const maxCapacity = 1024 * 1024
-		buf := make([]byte, maxCapacity)
-		scanner.Buffer(buf, maxCapacity)
+func generateResponseAsync(ctx context.Context, model, prompt string, callback func(string, bool)) {
+	// Usamos un mutex para evitar condiciones de carrera
+	var mu sync.Mutex
 
-		for scanner.Scan() {
+	// Preparamos la solicitud
+	reqBody, err := json.Marshal(GenerateRequest{
+		Model:  model,
+		Prompt: prompt,
+		Stream: true, // Aseguramos que está en modo streaming
+	})
+
+	if err != nil {
+		callback("", true) // Indicamos finalización si hay error
+		return
+	}
+
+	// Creamos la solicitud HTTP con contexto para poder cancelarla
+	req, err := http.NewRequestWithContext(ctx, "POST", ollamaURL+"/api/generate", bytes.NewBuffer(reqBody))
+	if err != nil {
+		callback("", true)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	// Realizamos la solicitud
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		callback("", true)
+		return
+	}
+	defer resp.Body.Close()
+
+	// Preparamos un escáner para leer línea por línea
+	scanner := bufio.NewScanner(resp.Body)
+	const maxCapacity = 1024 * 1024
+	buf := make([]byte, maxCapacity)
+	scanner.Buffer(buf, maxCapacity)
+
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			// Si el contexto ha sido cancelado, finalizamos
+			callback("", true)
+			return
+		default:
+			// Procesamos la línea
 			line := scanner.Text()
 			if line == "" {
 				continue
@@ -347,30 +438,37 @@ func generateResponse(model, prompt string) tea.Cmd {
 
 			var genResp GenerateResponse
 			if err := json.Unmarshal([]byte(line), &genResp); err != nil {
-				fmt.Printf("Error en línea: %v\n", err)
 				continue
 			}
 
-			// Si recibimos contenido, enviamos inmediatamente el token
+			mu.Lock()
 			if genResp.Response != "" {
-				return tokenMsg{token: genResp.Response}
+				callback(genResp.Response, genResp.Done)
 			}
 
-			// Si hemos terminado, enviamos un mensaje de finalización
 			if genResp.Done {
-				return generatedResponseMsg{response: ""}
+				callback("", true)
+				mu.Unlock()
+				return
 			}
+			mu.Unlock()
 		}
-
-		if err := scanner.Err(); err != nil {
-			return errorMsg{fmt.Errorf("error leyendo respuesta: %v", err)}
-		}
-
-		return generatedResponseMsg{response: ""}
 	}
+
+	if err := scanner.Err(); err != nil {
+		callback("", true)
+	}
+
+	// Aseguramos que se envíe una señal de finalización
+	callback("", true)
 }
 
 func main() {
+	// Aseguramos que el canal de tokens está creado
+	if tokenChan == nil {
+		tokenChan = make(chan tokenMsg, 100)
+	}
+
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error initializing application: %v\n", err)
