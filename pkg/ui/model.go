@@ -91,6 +91,10 @@ func NewModel() Model {
 			Name:    "ollama",
 			Details: "Local LLM server",
 		},
+		models.ListItem{
+			Name:    "openai",
+			Details: "OpenAI API",
+		},
 	})
 
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
@@ -129,10 +133,9 @@ func NewModel() Model {
 
 // Init initializes the UI model
 func (m Model) Init() tea.Cmd {
-	// Send initial commands to fetch models and start the spinner
-	// Also send a WindowSizeMsg to initialize the layout properly
+	// Send initial commands to start the spinner and enter alt screen
+	// We'll fetch models after provider selection
 	cmds := []tea.Cmd{
-		FetchModelsCmd,
 		m.Spinner.Tick,
 		tea.EnterAltScreen,
 	}

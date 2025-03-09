@@ -15,6 +15,7 @@ import (
 const (
 	// DefaultOllamaURL is the default URL for the Ollama API
 	DefaultOllamaURL = "http://localhost:11434"
+	DefaultOpenAIURL = "https://api.openai.com/v1"
 )
 
 // Client represents an Ollama API client
@@ -25,8 +26,14 @@ type Client struct {
 }
 
 // NewClient creates a new Ollama API client
-func NewClient(baseURL string) *Client {
-	if baseURL == "" {
+func NewClient(provider string) *Client {
+	var baseURL string
+	switch provider {
+	case "openai":
+		baseURL = DefaultOpenAIURL
+	case "ollama":
+		baseURL = DefaultOllamaURL
+	default:
 		baseURL = DefaultOllamaURL
 	}
 
@@ -36,8 +43,53 @@ func NewClient(baseURL string) *Client {
 	}
 }
 
-// FetchModels fetches the list of available models from the Ollama API
+// FetchModels fetches the list of available models based on the provider
 func (c *Client) FetchModels() ([]models.Model, error) {
+	// Check if the URL contains "openai" to determine if it's OpenAI
+	if c.BaseURL == DefaultOpenAIURL {
+		// For OpenAI, return a predefined list of models
+		// In a real implementation, you would call the OpenAI API to get the models
+		return []models.Model{
+			{
+				Name: "gpt-3.5-turbo",
+				Details: struct {
+					Family  string `json:"family"`
+					Format  string `json:"format"`
+					Context int    `json:"context"`
+				}{
+					Family:  "GPT-3.5",
+					Format:  "Chat",
+					Context: 4096,
+				},
+			},
+			{
+				Name: "gpt-4",
+				Details: struct {
+					Family  string `json:"family"`
+					Format  string `json:"format"`
+					Context int    `json:"context"`
+				}{
+					Family:  "GPT-4",
+					Format:  "Chat",
+					Context: 8192,
+				},
+			},
+			{
+				Name: "gpt-4-turbo",
+				Details: struct {
+					Family  string `json:"family"`
+					Format  string `json:"format"`
+					Context int    `json:"context"`
+				}{
+					Family:  "GPT-4",
+					Format:  "Chat",
+					Context: 128000,
+				},
+			},
+		}, nil
+	}
+
+	// For Ollama, use the existing implementation
 	resp, err := c.client.Get(c.BaseURL + "/api/tags")
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch models: %w", err)

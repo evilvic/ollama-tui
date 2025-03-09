@@ -21,13 +21,18 @@ func init() {
 	APIClient = api.NewClient("")
 }
 
-// FetchModelsCmd fetches the list of available models
-func FetchModelsCmd() tea.Msg {
-	models, err := APIClient.FetchModels()
-	if err != nil {
-		return ErrorMsg{Err: err}
+// FetchModelsCmd fetches the list of available models for the specified provider
+func FetchModelsCmd(provider string) tea.Cmd {
+	return func() tea.Msg {
+		// Create a new API client for the selected provider
+		APIClient = api.NewClient(provider)
+
+		models, err := APIClient.FetchModels()
+		if err != nil {
+			return ErrorMsg{Err: err}
+		}
+		return FetchModelsMsg{Models: models}
 	}
-	return FetchModelsMsg{Models: models}
 }
 
 // ListenForTokensCmd listens for token messages
