@@ -12,3 +12,8 @@ func GetEnv(key, defaultValue string) string {
 	}
 	return value
 }
+
+// SetEnv sets an environment variable
+func SetEnv(key, value string) error {
+	return os.Setenv(key, value)
+}

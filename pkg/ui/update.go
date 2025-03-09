@@ -65,8 +65,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 					// If OpenAI is selected, check for API key
 					if m.SelectedProvider == "openai" {
-						// Check for OPENAI_API_KEY environment variable
+						// First check for OPENAI_API_KEY environment variable
 						apiKey := utils.GetEnv("OPENAI_API_KEY", "")
+
+						// If not found in environment, try to load from config file
+						if apiKey == "" {
+							config, err := utils.LoadConfig()
+							if err == nil && config.OpenAIAPIKey != "" {
+								apiKey = config.OpenAIAPIKey
+
+								// Set the API key as an environment variable for the current session
+								_ = utils.SetEnv("OPENAI_API_KEY", apiKey)
+							}
+						}
+
 						if apiKey == "" {
 							// No API key found, transition to API key input state
 							m.State = StateAPIKeyInput
@@ -121,6 +133,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.State == StateAPIKeyInput {
 				apiKey := strings.TrimSpace(m.APIKeyInput.Value())
 				if apiKey != "" {
+					// Set the API key as an environment variable for the current session
+					err := utils.SetEnv("OPENAI_API_KEY", apiKey)
+					if err != nil {
+						// If there's an error setting the environment variable,
+						// we can still proceed with the API key for the current session
+						m.Err = err
+					}
+
+					// Save the API key to the configuration file for future sessions
+					err = utils.SaveAPIKey(apiKey)
+					if err != nil {
+						// If there's an error saving the API key, we can still proceed
+						// with the API key for the current session
+						m.Err = err
+					}
+
 					// Transition to model selection with the provided API key
 					m.State = StateModelSelect
 
