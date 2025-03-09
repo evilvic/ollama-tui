@@ -20,6 +20,8 @@ import (
 const (
 	// StateProviderSelect is the state for selecting a provider
 	StateProviderSelect = iota
+	// StateAPIKeyInput is the state for entering an API key
+	StateAPIKeyInput
 	// StateModelSelect is the state for selecting a model
 	StateModelSelect
 	// StatePrompting is the state for entering a prompt
@@ -37,6 +39,7 @@ type Model struct {
 	SelectedProvider   string
 	SelectedModel      string
 	Input              textarea.Model
+	APIKeyInput        textarea.Model
 	Viewport           viewport.Model
 	Spinner            spinner.Model
 	Responses          []string
@@ -111,6 +114,15 @@ func NewModel() Model {
 	ta.SetHeight(3)
 	ta.ShowLineNumbers = false
 
+	// API Key input
+	apiKeyInput := textarea.New()
+	apiKeyInput.Placeholder = "Enter your OpenAI API key..."
+	apiKeyInput.Focus()
+	apiKeyInput.CharLimit = 100
+	apiKeyInput.SetWidth(100)
+	apiKeyInput.SetHeight(3)
+	apiKeyInput.ShowLineNumbers = false
+
 	vp := viewport.New(0, 0)
 	vp.Style = ResponseStyle
 	vp.SetContent("Responses will appear here.\n\n")
@@ -121,6 +133,7 @@ func NewModel() Model {
 		List:               l,
 		Spinner:            s,
 		Input:              ta,
+		APIKeyInput:        apiKeyInput,
 		Viewport:           vp,
 		Responses:          []string{},
 		InProgressResponse: "",
@@ -161,7 +174,7 @@ func InitializeWindowSizeCmd() tea.Msg {
 
 // AppLayout returns the layout dimensions for the application
 func AppLayout(width, height int, state int) (int, int) {
-	if state == StateProviderSelect || state == StateModelSelect {
+	if state == StateProviderSelect || state == StateModelSelect || state == StateAPIKeyInput {
 		return width, height - 4
 	}
 
@@ -174,6 +187,43 @@ func (m Model) View() string {
 	switch m.State {
 	case StateProviderSelect:
 		return m.ProviderList.View()
+
+	case StateAPIKeyInput:
+		// Create a container for the API key input
+		width := m.ScreenWidth
+		height := m.ScreenHeight
+
+		// Title
+		titleView := TitleStyle.Render("OpenAI API Key Required")
+
+		// Instructions
+		instructions := "Please enter your OpenAI API key to continue.\nYou can find your API key at https://platform.openai.com/api-keys\n\nPress Enter to continue or Esc to go back."
+		instructionsView := lipgloss.NewStyle().
+			Width(width-4).
+			Padding(1, 0, 1, 0).
+			Render(instructions)
+
+		// Input
+		inputStyle := InputBoxStyle.Copy().Width(width - 4)
+		inputView := inputStyle.Render(m.APIKeyInput.View())
+
+		// Combine views
+		content := lipgloss.JoinVertical(
+			lipgloss.Left,
+			titleView,
+			"\n",
+			instructionsView,
+			"\n",
+			inputView,
+		)
+
+		return lipgloss.Place(
+			width,
+			height,
+			lipgloss.Center,
+			lipgloss.Center,
+			content,
+		)
 
 	case StateModelSelect:
 		return m.List.View()

@@ -23,6 +23,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.IsGenerating && m.CancelGenerate != nil {
 				m.CancelGenerate()
 			}
+
+			// If we're in the API key input state, go back to provider selection
+			if m.State == StateAPIKeyInput {
+				m.State = StateProviderSelect
+				return m, nil
+			}
+
 			return m, tea.Quit
 
 		case "tab":
@@ -55,6 +62,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.State == StateProviderSelect {
 				if i, ok := m.ProviderList.SelectedItem().(models.ListItem); ok {
 					m.SelectedProvider = i.Name
+
+					// If OpenAI is selected, check for API key
+					if m.SelectedProvider == "openai" {
+						// Check for OPENAI_API_KEY environment variable
+						apiKey := utils.GetEnv("OPENAI_API_KEY", "")
+						if apiKey == "" {
+							// No API key found, transition to API key input state
+							m.State = StateAPIKeyInput
+							m.APIKeyInput.Reset()
+							m.APIKeyInput.Focus()
+
+							return m, tea.Batch(
+								tea.ClearScreen,
+								func() tea.Msg {
+									return tea.WindowSizeMsg{
+										Width:  m.ScreenWidth,
+										Height: m.ScreenHeight,
+									}
+								},
+							)
+						}
+
+						// API key found, proceed to model selection
+						m.State = StateModelSelect
+						return m, tea.Batch(
+							tea.ClearScreen,
+							func() tea.Msg {
+								return tea.WindowSizeMsg{
+									Width:  m.ScreenWidth,
+									Height: m.ScreenHeight,
+								}
+							},
+							FetchModelsCmd(m.SelectedProvider, apiKey),
+						)
+					}
+
+					// For other providers, proceed to model selection
 					m.State = StateModelSelect
 
 					// Return a batch of commands:
@@ -69,7 +113,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 								Height: m.ScreenHeight,
 							}
 						},
-						FetchModelsCmd(m.SelectedProvider),
+						FetchModelsCmd(m.SelectedProvider, ""),
+					)
+				}
+			}
+
+			if m.State == StateAPIKeyInput {
+				apiKey := strings.TrimSpace(m.APIKeyInput.Value())
+				if apiKey != "" {
+					// Transition to model selection with the provided API key
+					m.State = StateModelSelect
+
+					return m, tea.Batch(
+						tea.ClearScreen,
+						func() tea.Msg {
+							return tea.WindowSizeMsg{
+								Width:  m.ScreenWidth,
+								Height: m.ScreenHeight,
+							}
+						},
+						FetchModelsCmd(m.SelectedProvider, apiKey),
 					)
 				}
 			}
@@ -170,6 +233,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.State == StateProviderSelect {
 			m.ProviderList.SetSize(h, v)
 			return m, nil
+		} else if m.State == StateAPIKeyInput {
+			m.APIKeyInput.SetWidth(h - 10) // Adjust width for padding
+			return m, nil
 		} else if m.State == StateModelSelect {
 			m.List.SetSize(h, v)
 			return m, nil
@@ -236,6 +302,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case StateProviderSelect:
 		var cmd tea.Cmd
 		m.ProviderList, cmd = m.ProviderList.Update(msg)
+		cmds = append(cmds, cmd)
+
+	case StateAPIKeyInput:
+		var cmd tea.Cmd
+		m.APIKeyInput, cmd = m.APIKeyInput.Update(msg)
 		cmds = append(cmds, cmd)
 
 	case StateModelSelect:

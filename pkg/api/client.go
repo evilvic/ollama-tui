@@ -18,15 +18,16 @@ const (
 	DefaultOpenAIURL = "https://api.openai.com/v1"
 )
 
-// Client represents an Ollama API client
+// Client represents an API client
 type Client struct {
 	BaseURL string
+	APIKey  string
 	client  *http.Client
 	context []int
 }
 
-// NewClient creates a new Ollama API client
-func NewClient(provider string) *Client {
+// NewClient creates a new API client
+func NewClient(provider string, apiKey string) *Client {
 	var baseURL string
 	switch provider {
 	case "openai":
@@ -39,6 +40,7 @@ func NewClient(provider string) *Client {
 
 	return &Client{
 		BaseURL: baseURL,
+		APIKey:  apiKey,
 		client:  &http.Client{},
 	}
 }

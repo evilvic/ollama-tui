@@ -18,14 +18,14 @@ var (
 // Initialize the token channel
 func init() {
 	TokenChan = make(chan TokenMsg, 100)
-	APIClient = api.NewClient("")
+	APIClient = api.NewClient("", "")
 }
 
 // FetchModelsCmd fetches the list of available models for the specified provider
-func FetchModelsCmd(provider string) tea.Cmd {
+func FetchModelsCmd(provider string, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		// Create a new API client for the selected provider
-		APIClient = api.NewClient(provider)
+		APIClient = api.NewClient(provider, apiKey)
 
 		models, err := APIClient.FetchModels()
 		if err != nil {
