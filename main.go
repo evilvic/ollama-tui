@@ -91,17 +91,15 @@ type mainModel struct {
 	currentPrompt      string
 	currentResponse    string
 	err                error
-	inProgressResponse string // Para acumular tokens a medida que llegan
+	inProgressResponse string
 	isGenerating       bool
-	screenWidth        int // Track screen width for text wrapping
-	// Variable para manejar la cancelación de generación
-	cancelGenerate context.CancelFunc
+	screenWidth        int
+	cancelGenerate     context.CancelFunc
 }
 
-// Better text wrapping function that preserves whole words
 func wrapText(text string, width int) string {
 	if width <= 10 {
-		return text // Too narrow to wrap sensibly
+		return text
 	}
 
 	lines := strings.Split(text, "\n")
@@ -113,33 +111,27 @@ func wrapText(text string, width int) string {
 			continue
 		}
 
-		// Split line into words
 		words := strings.Fields(line)
 		if len(words) == 0 {
 			result = append(result, "")
 			continue
 		}
 
-		// Build wrapped lines word by word
 		currentLine := words[0]
 		currentWidth := len(words[0])
 
 		for i := 1; i < len(words); i++ {
 			word := words[i]
-			// Check if adding this word would exceed width
 			if currentWidth+1+len(word) > width {
-				// Line would be too long with this word, start a new line
 				result = append(result, currentLine)
 				currentLine = word
 				currentWidth = len(word)
 			} else {
-				// Add word to current line
 				currentLine += " " + word
 				currentWidth += 1 + len(word)
 			}
 		}
 
-		// Don't forget the last line
 		if currentLine != "" {
 			result = append(result, currentLine)
 		}
@@ -179,7 +171,7 @@ func initialModel() mainModel {
 		responses:          []string{},
 		inProgressResponse: "",
 		isGenerating:       false,
-		screenWidth:        80, // Default width
+		screenWidth:        80,
 	}
 }
 
@@ -197,7 +189,6 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "esc":
-			// Si estamos generando, cancela la generación
 			if m.isGenerating && m.cancelGenerate != nil {
 				m.cancelGenerate()
 			}
@@ -213,7 +204,6 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.state == statePrompting {
 				if strings.TrimSpace(m.input.Value()) != "" {
-					// Si ya estamos generando, cancela la generación anterior
 					if m.isGenerating && m.cancelGenerate != nil {
 						m.cancelGenerate()
 					}
@@ -224,7 +214,6 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.isGenerating = true
 					m.inProgressResponse = ""
 
-					// Preparamos una nueva respuesta vacía
 					m.responses = append(m.responses, fmt.Sprintf("Prompt: %s\n\nResponse:\n", m.currentPrompt))
 
 					return m, startGenerateResponse(m.selectedModel, m.currentPrompt)
@@ -233,7 +222,6 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case setCancelFuncMsg:
-		// Guardamos la función de cancelación
 		m.cancelGenerate = msg.cancel
 		return m, nil
 
@@ -250,49 +238,39 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tokenMsg:
-		// Si el mensaje es de finalización y no estamos generando, ignorarlo
 		if msg.done && !m.isGenerating {
 			return m, nil
 		}
 
-		// Agregamos el token a la respuesta en curso
 		m.inProgressResponse += msg.token
 
-		// Actualizamos la visualización
 		if len(m.responses) > 0 {
-			// Actualizamos la última respuesta con lo que tenemos hasta ahora
-			// Wrap text to fit screen width
 			responseText := m.inProgressResponse
 			if m.screenWidth > 10 {
-				responseText = wrapText(responseText, m.screenWidth-10) // Add margin for safety
+				responseText = wrapText(responseText, m.screenWidth-10)
 			}
 
 			m.responses[len(m.responses)-1] = fmt.Sprintf("Prompt: %s\n\nResponse:\n%s", m.currentPrompt, responseText)
 		}
 
-		// Verificamos si hemos terminado
 		if msg.done {
 			m.currentResponse = m.inProgressResponse
 			m.isGenerating = false
 			m.state = statePrompting
-			// Limpiamos la cancelación
 			m.cancelGenerate = nil
 			return m, nil
 		}
 
-		// Seguimos escuchando más tokens
 		return m, listenForTokens()
 
 	case errorMsg:
 		m.err = msg.err
 		m.isGenerating = false
 		m.state = statePrompting
-		// Limpiamos la cancelación
 		m.cancelGenerate = nil
 		return m, nil
 
 	case tea.WindowSizeMsg:
-		// Store screen width for text wrapping
 		m.screenWidth = msg.Width
 
 		h, v := appLayout(msg.Width, msg.Height, m.state)
@@ -301,17 +279,14 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.input.SetWidth(h)
 
-			// Ajustar mejor el viewport
-			m.viewport.Width = h - 4 // Un poco más estrecho que el ancho total
+			m.viewport.Width = h - 4
 
-			// Asegurarnos de que el viewport tenga altura suficiente
-			viewportHeight := v - 12 // Reservar espacio para título, input y barra de estado
+			viewportHeight := v - 12
 			if viewportHeight < 1 {
 				viewportHeight = 1
 			}
 			m.viewport.Height = viewportHeight
 
-			// Rewrap existing responses based on new width
 			if len(m.responses) > 0 && len(m.inProgressResponse) > 0 {
 				responseText := wrapText(m.inProgressResponse, msg.Width-10)
 				m.responses[len(m.responses)-1] = fmt.Sprintf("Prompt: %s\n\nResponse:\n%s", m.currentPrompt, responseText)
@@ -353,9 +328,7 @@ func (m mainModel) View() string {
 		sb.WriteString(titleStyle.Render(fmt.Sprintf("Chat with %s", m.selectedModel)))
 		sb.WriteString("\n\n")
 
-		// Mostrar historial de conversación
 		if len(m.responses) > 0 {
-			// Mostramos todas las respuestas, incluida la que está en progreso
 			for _, resp := range m.responses {
 				sb.WriteString(responseStyle.Render(resp))
 				sb.WriteString("\n\n")
@@ -365,12 +338,10 @@ func (m mainModel) View() string {
 			sb.WriteString("\n\n")
 		}
 
-		// Si estamos generando, mostramos un indicador
 		if m.state == stateLoading && m.isGenerating {
 			sb.WriteString(fmt.Sprintf("  %s Generating...\n\n", m.spinner.View()))
 		}
 
-		// Colocamos la entrada al final
 		sb.WriteString(m.input.View())
 		sb.WriteString("\n\n")
 		sb.WriteString(statusBarStyle.Render(fmt.Sprintf(" %s | Ctrl+C to exit ", m.selectedModel)))
@@ -385,7 +356,6 @@ func appLayout(width, height int, state int) (int, int) {
 	if state == stateModelSelect {
 		return width, height - 4
 	}
-	// Usar casi toda la altura disponible
 	return width, height - 2
 }
 
@@ -406,68 +376,55 @@ func fetchModels() tea.Cmd {
 	}
 }
 
-// Usamos un canal para comunicar los tokens desde la goroutine a nuestro programa
 var tokenChan chan tokenMsg
 
-// Inicializamos el canal en la función main
 func init() {
-	tokenChan = make(chan tokenMsg, 100) // Buffer para evitar bloqueos
+	tokenChan = make(chan tokenMsg, 100)
 }
 
-// Mensaje para establecer la función de cancelación
 type setCancelFuncMsg struct {
 	cancel context.CancelFunc
 }
 
-// Comando que escucha en el canal de tokens
 func listenForTokens() tea.Cmd {
 	return func() tea.Msg {
 		return <-tokenChan
 	}
 }
 
-// Empezamos la generación en una goroutine separada para evitar bloqueos
 func startGenerateResponse(model, prompt string) tea.Cmd {
 	return func() tea.Msg {
-		// Creamos un contexto cancelable
 		ctx, cancel := context.WithCancel(context.Background())
 
-		// Guardamos la función de cancelación en un comando separado
 		cmds := []tea.Cmd{
 			func() tea.Msg {
 				return setCancelFuncMsg{cancel: cancel}
 			},
 		}
 
-		// Iniciamos la generación en una goroutine
 		go generateResponseAsync(ctx, model, prompt, func(token string, done bool) {
-			// Enviamos tokens al canal
 			tokenChan <- tokenMsg{token: token, done: done}
 		})
 
-		// Devolvemos un batch de comandos
 		cmds = append(cmds, listenForTokens())
 		return tea.Batch(cmds...)()
 	}
 }
 
 func generateResponseAsync(ctx context.Context, model, prompt string, callback func(string, bool)) {
-	// Usamos un mutex para evitar condiciones de carrera
 	var mu sync.Mutex
 
-	// Preparamos la solicitud
 	reqBody, err := json.Marshal(GenerateRequest{
 		Model:  model,
 		Prompt: prompt,
-		Stream: true, // Aseguramos que está en modo streaming
+		Stream: true,
 	})
 
 	if err != nil {
-		callback("", true) // Indicamos finalización si hay error
+		callback("", true)
 		return
 	}
 
-	// Creamos la solicitud HTTP con contexto para poder cancelarla
 	req, err := http.NewRequestWithContext(ctx, "POST", ollamaURL+"/api/generate", bytes.NewBuffer(reqBody))
 	if err != nil {
 		callback("", true)
@@ -475,7 +432,6 @@ func generateResponseAsync(ctx context.Context, model, prompt string, callback f
 	}
 	req.Header.Set("Content-Type", "application/json")
 
-	// Realizamos la solicitud
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -484,7 +440,6 @@ func generateResponseAsync(ctx context.Context, model, prompt string, callback f
 	}
 	defer resp.Body.Close()
 
-	// Preparamos un escáner para leer línea por línea
 	scanner := bufio.NewScanner(resp.Body)
 	const maxCapacity = 1024 * 1024
 	buf := make([]byte, maxCapacity)
@@ -493,11 +448,9 @@ func generateResponseAsync(ctx context.Context, model, prompt string, callback f
 	for scanner.Scan() {
 		select {
 		case <-ctx.Done():
-			// Si el contexto ha sido cancelado, finalizamos
 			callback("", true)
 			return
 		default:
-			// Procesamos la línea
 			line := scanner.Text()
 			if line == "" {
 				continue
@@ -526,12 +479,10 @@ func generateResponseAsync(ctx context.Context, model, prompt string, callback f
 		callback("", true)
 	}
 
-	// Aseguramos que se envíe una señal de finalización
 	callback("", true)
 }
 
 func main() {
-	// Aseguramos que el canal de tokens está creado
 	if tokenChan == nil {
 		tokenChan = make(chan tokenMsg, 100)
 	}
