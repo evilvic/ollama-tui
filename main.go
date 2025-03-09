@@ -93,8 +93,59 @@ type mainModel struct {
 	err                error
 	inProgressResponse string // Para acumular tokens a medida que llegan
 	isGenerating       bool
+	screenWidth        int // Track screen width for text wrapping
 	// Variable para manejar la cancelación de generación
 	cancelGenerate context.CancelFunc
+}
+
+// Better text wrapping function that preserves whole words
+func wrapText(text string, width int) string {
+	if width <= 10 {
+		return text // Too narrow to wrap sensibly
+	}
+
+	lines := strings.Split(text, "\n")
+	var result []string
+
+	for _, line := range lines {
+		if len(line) <= width {
+			result = append(result, line)
+			continue
+		}
+
+		// Split line into words
+		words := strings.Fields(line)
+		if len(words) == 0 {
+			result = append(result, "")
+			continue
+		}
+
+		// Build wrapped lines word by word
+		currentLine := words[0]
+		currentWidth := len(words[0])
+
+		for i := 1; i < len(words); i++ {
+			word := words[i]
+			// Check if adding this word would exceed width
+			if currentWidth+1+len(word) > width {
+				// Line would be too long with this word, start a new line
+				result = append(result, currentLine)
+				currentLine = word
+				currentWidth = len(word)
+			} else {
+				// Add word to current line
+				currentLine += " " + word
+				currentWidth += 1 + len(word)
+			}
+		}
+
+		// Don't forget the last line
+		if currentLine != "" {
+			result = append(result, currentLine)
+		}
+	}
+
+	return strings.Join(result, "\n")
 }
 
 func initialModel() mainModel {
@@ -128,6 +179,7 @@ func initialModel() mainModel {
 		responses:          []string{},
 		inProgressResponse: "",
 		isGenerating:       false,
+		screenWidth:        80, // Default width
 	}
 }
 
@@ -209,7 +261,13 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Actualizamos la visualización
 		if len(m.responses) > 0 {
 			// Actualizamos la última respuesta con lo que tenemos hasta ahora
-			m.responses[len(m.responses)-1] = fmt.Sprintf("Prompt: %s\n\nResponse:\n%s", m.currentPrompt, m.inProgressResponse)
+			// Wrap text to fit screen width
+			responseText := m.inProgressResponse
+			if m.screenWidth > 10 {
+				responseText = wrapText(responseText, m.screenWidth-10) // Add margin for safety
+			}
+
+			m.responses[len(m.responses)-1] = fmt.Sprintf("Prompt: %s\n\nResponse:\n%s", m.currentPrompt, responseText)
 		}
 
 		// Verificamos si hemos terminado
@@ -234,6 +292,9 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.WindowSizeMsg:
+		// Store screen width for text wrapping
+		m.screenWidth = msg.Width
+
 		h, v := appLayout(msg.Width, msg.Height, m.state)
 		if m.state == stateModelSelect {
 			m.list.SetSize(h, v)
@@ -249,6 +310,12 @@ func (m mainModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				viewportHeight = 1
 			}
 			m.viewport.Height = viewportHeight
+
+			// Rewrap existing responses based on new width
+			if len(m.responses) > 0 && len(m.inProgressResponse) > 0 {
+				responseText := wrapText(m.inProgressResponse, msg.Width-10)
+				m.responses[len(m.responses)-1] = fmt.Sprintf("Prompt: %s\n\nResponse:\n%s", m.currentPrompt, responseText)
+			}
 		}
 		return m, nil
 
@@ -299,8 +366,8 @@ func (m mainModel) View() string {
 		}
 
 		// Si estamos generando, mostramos un indicador
-		if m.state == stateLoading && !m.isGenerating {
-			sb.WriteString(fmt.Sprintf("  %s Thinking...\n\n", m.spinner.View()))
+		if m.state == stateLoading && m.isGenerating {
+			sb.WriteString(fmt.Sprintf("  %s Generating...\n\n", m.spinner.View()))
 		}
 
 		// Colocamos la entrada al final
