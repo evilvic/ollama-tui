@@ -18,8 +18,10 @@ import (
 )
 
 const (
+	// StateProviderSelect is the state for selecting a provider
+	StateProviderSelect = iota
 	// StateModelSelect is the state for selecting a model
-	StateModelSelect = iota
+	StateModelSelect
 	// StatePrompting is the state for entering a prompt
 	StatePrompting
 	// StateLoading is the state for loading a response
@@ -29,8 +31,10 @@ const (
 // Model represents the UI model
 type Model struct {
 	State              int
+	ProviderList       list.Model
 	List               list.Model
 	Models             []models.Model
+	SelectedProvider   string
 	SelectedModel      string
 	Input              textarea.Model
 	Viewport           viewport.Model
@@ -74,6 +78,21 @@ func NewModel() Model {
 	s.Spinner = spinner.Dot
 	s.Style = lipgloss.NewStyle().Foreground(lipgloss.Color("205"))
 
+	// Provider list
+	pl := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	pl.Title = "Available providers"
+	pl.SetShowStatusBar(false)
+	pl.SetFilteringEnabled(false)
+	pl.Styles.Title = TitleStyle
+
+	// Add Ollama as the only provider for now
+	pl.SetItems([]list.Item{
+		models.ListItem{
+			Name:    "ollama",
+			Details: "Local LLM server",
+		},
+	})
+
 	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
 	l.Title = "Available models"
 	l.SetShowStatusBar(false)
@@ -93,7 +112,8 @@ func NewModel() Model {
 	vp.SetContent("Responses will appear here.\n\n")
 
 	return Model{
-		State:              StateModelSelect,
+		State:              StateProviderSelect,
+		ProviderList:       pl,
 		List:               l,
 		Spinner:            s,
 		Input:              ta,
@@ -138,7 +158,7 @@ func InitializeWindowSizeCmd() tea.Msg {
 
 // AppLayout returns the layout dimensions for the application
 func AppLayout(width, height int, state int) (int, int) {
-	if state == StateModelSelect {
+	if state == StateProviderSelect || state == StateModelSelect {
 		return width, height - 4
 	}
 
@@ -149,6 +169,9 @@ func AppLayout(width, height int, state int) (int, int) {
 // View renders the UI
 func (m Model) View() string {
 	switch m.State {
+	case StateProviderSelect:
+		return m.ProviderList.View()
+
 	case StateModelSelect:
 		return m.List.View()
 

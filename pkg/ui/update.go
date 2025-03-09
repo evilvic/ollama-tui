@@ -52,6 +52,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 		case "enter":
+			if m.State == StateProviderSelect {
+				if i, ok := m.ProviderList.SelectedItem().(models.ListItem); ok {
+					m.SelectedProvider = i.Name
+					m.State = StateModelSelect
+
+					// Return a batch of commands:
+					// 1. Clear the screen for a fresh start
+					// 2. Send a window size message to initialize the layout
+					// 3. Fetch models for the selected provider
+					return m, tea.Batch(
+						tea.ClearScreen,
+						func() tea.Msg {
+							return tea.WindowSizeMsg{
+								Width:  m.ScreenWidth,
+								Height: m.ScreenHeight,
+							}
+						},
+						FetchModelsCmd,
+					)
+				}
+			}
+
 			if m.State == StateModelSelect {
 				if i, ok := m.List.SelectedItem().(models.ListItem); ok {
 					m.SelectedModel = i.Name
@@ -145,7 +167,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ScreenHeight = msg.Height
 
 		h, v := AppLayout(msg.Width, msg.Height, m.State)
-		if m.State == StateModelSelect {
+		if m.State == StateProviderSelect {
+			m.ProviderList.SetSize(h, v)
+			return m, nil
+		} else if m.State == StateModelSelect {
 			m.List.SetSize(h, v)
 			return m, nil
 		}
@@ -206,16 +231,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	var cmd tea.Cmd
+	// Handle other messages
 	switch m.State {
+	case StateProviderSelect:
+		var cmd tea.Cmd
+		m.ProviderList, cmd = m.ProviderList.Update(msg)
+		cmds = append(cmds, cmd)
+
 	case StateModelSelect:
+		var cmd tea.Cmd
 		m.List, cmd = m.List.Update(msg)
 		cmds = append(cmds, cmd)
+
 	case StatePrompting:
-		if m.ViewportFocused {
-			m.Viewport, cmd = m.Viewport.Update(msg)
-			cmds = append(cmds, cmd)
-		} else {
+		if !m.ViewportFocused {
+			var cmd tea.Cmd
 			m.Input, cmd = m.Input.Update(msg)
 			cmds = append(cmds, cmd)
 
@@ -228,8 +258,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					cmds = append(cmds, cmd)
 				}
 			}
+		} else {
+			var cmd tea.Cmd
+			m.Viewport, cmd = m.Viewport.Update(msg)
+			cmds = append(cmds, cmd)
 		}
+
 	case StateLoading:
+		var cmd tea.Cmd
 		m.Spinner, cmd = m.Spinner.Update(msg)
 		cmds = append(cmds, cmd)
 	}
