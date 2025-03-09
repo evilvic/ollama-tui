@@ -19,9 +19,17 @@ type ModelListResponse struct {
 
 // GenerateRequest represents a request to generate text from a model
 type GenerateRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Stream bool   `json:"stream"`
+	Model    string        `json:"model"`
+	Prompt   string        `json:"prompt"`
+	Stream   bool          `json:"stream"`
+	Context  []int         `json:"context,omitempty"`
+	Messages []ChatMessage `json:"messages,omitempty"`
+}
+
+// ChatMessage represents a message in a chat conversation
+type ChatMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 // GenerateResponse represents a response from the Ollama API for text generation
@@ -30,6 +38,7 @@ type GenerateResponse struct {
 	Response  string `json:"response"`
 	Done      bool   `json:"done"`
 	CreatedAt string `json:"created_at"`
+	Context   []int  `json:"context,omitempty"`
 }
 
 // ListItem represents an item in the model selection list

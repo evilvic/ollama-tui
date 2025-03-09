@@ -181,7 +181,11 @@ func (m Model) View() string {
 		inputHeight := lipgloss.Height(inputView)
 
 		// Status bar (fixed at bottom)
-		statusText := fmt.Sprintf(" %s | Tab: Toggle focus | Ctrl+C: Exit ", m.SelectedModel)
+		contextIndicator := ""
+		if APIClient.HasContext() {
+			contextIndicator = "🔄 Context Active | "
+		}
+		statusText := fmt.Sprintf(" %s | %sTab: Toggle focus | Ctrl+N: New Chat | Ctrl+C: Exit ", m.SelectedModel, contextIndicator)
 		statusView := StatusBarStyle.Copy().Width(width).Render(statusText)
 		statusHeight := lipgloss.Height(statusView)
 

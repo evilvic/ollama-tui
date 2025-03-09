@@ -21,6 +21,7 @@ const (
 type Client struct {
 	BaseURL string
 	client  *http.Client
+	context []int
 }
 
 // NewClient creates a new Ollama API client
@@ -51,12 +52,24 @@ func (c *Client) FetchModels() ([]models.Model, error) {
 	return modelList.Models, nil
 }
 
+// ClearContext clears the conversation context
+func (c *Client) ClearContext() {
+	c.context = nil
+}
+
+// HasContext returns true if the client has a conversation context
+func (c *Client) HasContext() bool {
+	return c.context != nil && len(c.context) > 0
+}
+
 // GenerateResponse generates a response from a model
 func (c *Client) GenerateResponse(ctx context.Context, model, prompt string, callback func(string, bool)) error {
+	// Create the request with context if available
 	reqBody, err := json.Marshal(models.GenerateRequest{
-		Model:  model,
-		Prompt: prompt,
-		Stream: true,
+		Model:   model,
+		Prompt:  prompt,
+		Stream:  true,
+		Context: c.context,
 	})
 
 	if err != nil {
@@ -100,6 +113,11 @@ func (c *Client) GenerateResponse(ctx context.Context, model, prompt string, cal
 			mu.Lock()
 			if genResp.Response != "" {
 				callback(genResp.Response, genResp.Done)
+			}
+
+			// Save the context for future requests
+			if genResp.Context != nil && len(genResp.Context) > 0 {
+				c.context = genResp.Context
 			}
 
 			if genResp.Done {

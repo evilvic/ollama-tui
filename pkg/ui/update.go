@@ -36,6 +36,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 
+		case "ctrl+n":
+			// Clear conversation context and start a new chat
+			if m.State == StatePrompting {
+				APIClient.ClearContext()
+				return m, tea.Batch(
+					tea.ClearScreen,
+					func() tea.Msg {
+						return tea.WindowSizeMsg{
+							Width:  m.ScreenWidth,
+							Height: m.ScreenHeight,
+						}
+					},
+				)
+			}
+
 		case "enter":
 			if m.State == StateModelSelect {
 				if i, ok := m.List.SelectedItem().(models.ListItem); ok {
