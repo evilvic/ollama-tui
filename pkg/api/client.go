@@ -134,32 +134,46 @@ func (c *Client) FetchModels() ([]models.Model, error) {
 
 		logger.Printf("Decoded %d models from API\n", len(openAIResp.Data))
 
-		// Convert OpenAI models to our internal model format
-		result := make([]models.Model, 0, len(openAIResp.Data))
+		// Define the allowed models
+		allowedModels := map[string]bool{
+			"gpt-4o-mini":     true,
+			"o3-mini":         true,
+			"gpt-4o":          true,
+			"o1":              true,
+			"gpt-4.5-preview": true,
+		}
+
+		// Convert OpenAI models to our internal model format, filtering for allowed models
+		result := make([]models.Model, 0)
 		for _, m := range openAIResp.Data {
 			logger.Printf("Processing model: %s\n", m.ID)
-			model := models.Model{
-				Name: m.ID,
-				Details: struct {
-					Family  string `json:"family"`
-					Format  string `json:"format"`
-					Context int    `json:"context"`
-				}{
-					Family:  "OpenAI",
-					Format:  "Chat",
-					Context: 4096, // Default context size
-				},
+
+			// Check if this model is in our allowed list
+			if allowedModels[m.ID] {
+				model := models.Model{
+					Name: m.ID,
+					Details: struct {
+						Family  string `json:"family"`
+						Format  string `json:"format"`
+						Context int    `json:"context"`
+					}{
+						Family:  "OpenAI",
+						Format:  "Chat",
+						Context: 4096, // Default context size
+					},
+				}
+				result = append(result, model)
+				logger.Printf("Added allowed model: %s\n", m.ID)
 			}
-			result = append(result, model)
 		}
 
 		// Ensure we have at least some models
 		if len(result) == 0 {
-			logger.Println("No models found in API response, using hardcoded models")
-			return getHardcodedOpenAIModels(), nil
+			logger.Println("No allowed models found in API response, using hardcoded filtered models")
+			return getFilteredHardcodedOpenAIModels(), nil
 		}
 
-		logger.Printf("Returning %d models from API\n", len(result))
+		logger.Printf("Returning %d filtered models from API\n", len(result))
 		return result, nil
 	}
 
@@ -176,6 +190,72 @@ func (c *Client) FetchModels() ([]models.Model, error) {
 	}
 
 	return modelList.Models, nil
+}
+
+// getFilteredHardcodedOpenAIModels returns a filtered list of hardcoded OpenAI models
+func getFilteredHardcodedOpenAIModels() []models.Model {
+	return []models.Model{
+		{
+			Name: "gpt-4o-mini",
+			Details: struct {
+				Family  string `json:"family"`
+				Format  string `json:"format"`
+				Context int    `json:"context"`
+			}{
+				Family:  "GPT-4",
+				Format:  "Chat",
+				Context: 8192,
+			},
+		},
+		{
+			Name: "gpt-4o",
+			Details: struct {
+				Family  string `json:"family"`
+				Format  string `json:"format"`
+				Context int    `json:"context"`
+			}{
+				Family:  "GPT-4",
+				Format:  "Chat",
+				Context: 128000,
+			},
+		},
+		{
+			Name: "o1",
+			Details: struct {
+				Family  string `json:"family"`
+				Format  string `json:"format"`
+				Context int    `json:"context"`
+			}{
+				Family:  "OpenAI",
+				Format:  "Chat",
+				Context: 128000,
+			},
+		},
+		{
+			Name: "o3-mini",
+			Details: struct {
+				Family  string `json:"family"`
+				Format  string `json:"format"`
+				Context int    `json:"context"`
+			}{
+				Family:  "OpenAI",
+				Format:  "Chat",
+				Context: 128000,
+			},
+		},
+		{
+			Name: "gpt-4.5-preview",
+			Details: struct {
+				Family  string `json:"family"`
+				Format  string `json:"format"`
+				Context int    `json:"context"`
+			}{
+				Family:  "GPT-4.5",
+				Format:  "Chat",
+				Context: 128000,
+			},
+		},
+	}
 }
 
 // getHardcodedOpenAIModels returns a list of hardcoded OpenAI models
