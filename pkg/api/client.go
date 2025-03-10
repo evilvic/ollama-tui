@@ -6,19 +6,21 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
+	"os"
+	"strings"
 	"sync"
 
 	"github.com/evilvic/ollama-tui/pkg/models"
 )
 
 const (
-	// DefaultOllamaURL is the default URL for the Ollama API
 	DefaultOllamaURL = "http://localhost:11434"
 	DefaultOpenAIURL = "https://api.openai.com/v1"
 )
 
-// Client represents an API client
 type Client struct {
 	BaseURL string
 	APIKey  string
@@ -26,7 +28,6 @@ type Client struct {
 	context []int
 }
 
-// NewClient creates a new API client
 func NewClient(provider string, apiKey string) *Client {
 	var baseURL string
 	switch provider {
@@ -45,50 +46,117 @@ func NewClient(provider string, apiKey string) *Client {
 	}
 }
 
-// FetchModels fetches the list of available models based on the provider
 func (c *Client) FetchModels() ([]models.Model, error) {
-	// Check if the URL contains "openai" to determine if it's OpenAI
+	// Create a log file
+	logFile, err := os.OpenFile("openai_api.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err != nil {
+		return getHardcodedOpenAIModels(), nil
+	}
+	defer logFile.Close()
+
+	logger := log.New(logFile, "", log.LstdFlags)
+
 	if c.BaseURL == DefaultOpenAIURL {
-		// For OpenAI, return a predefined list of models
-		// In a real implementation, you would call the OpenAI API to get the models
-		return []models.Model{
-			{
-				Name: "gpt-3.5-turbo",
+		logger.Println("Fetching OpenAI models from API...")
+
+		// Create a request to the OpenAI API
+		req, err := http.NewRequest("GET", c.BaseURL+"/models", nil)
+		if err != nil {
+			logger.Printf("Error creating request: %v\n", err)
+			return getHardcodedOpenAIModels(), nil
+		}
+
+		// Add the API key to the request header
+		req.Header.Set("Authorization", "Bearer "+c.APIKey)
+		req.Header.Set("Content-Type", "application/json")
+
+		// Log a masked version of the API key for debugging
+		maskedKey := "****"
+		if len(c.APIKey) > 4 {
+			maskedKey = c.APIKey[:4] + "..." + c.APIKey[len(c.APIKey)-4:]
+		}
+		logger.Printf("Sending request to %s with API key: %s (length: %d)\n",
+			c.BaseURL+"/models", maskedKey, len(c.APIKey))
+
+		// Send the request
+		resp, err := c.client.Do(req)
+		if err != nil {
+			logger.Printf("Error sending request: %v\n", err)
+			return getHardcodedOpenAIModels(), nil
+		}
+		defer resp.Body.Close()
+
+		logger.Printf("Response status code: %d\n", resp.StatusCode)
+
+		// Check for error status codes
+		if resp.StatusCode != http.StatusOK {
+			// Read the response body to get error details
+			bodyBytes, err := io.ReadAll(resp.Body)
+			if err != nil {
+				logger.Printf("Error reading error response body: %v\n", err)
+				return getHardcodedOpenAIModels(), nil
+			}
+
+			logger.Printf("Error response body: %s\n", string(bodyBytes))
+
+			if resp.StatusCode == 401 {
+				logger.Println("Authentication error: The API key is invalid or missing.")
+				logger.Printf("API Key format check: starts with 'sk-'? %v, length > 20? %v\n",
+					strings.HasPrefix(c.APIKey, "sk-"), len(c.APIKey) > 20)
+			}
+
+			return getHardcodedOpenAIModels(), nil
+		}
+
+		// Read the response body for debugging
+		bodyBytes, err := io.ReadAll(resp.Body)
+		if err != nil {
+			logger.Printf("Error reading response body: %v\n", err)
+			return getHardcodedOpenAIModels(), nil
+		}
+
+		// Log the response body
+		logger.Printf("Response body: %s\n", string(bodyBytes))
+
+		// Create a new reader from the bytes for JSON decoding
+		respBodyReader := bytes.NewReader(bodyBytes)
+
+		// Decode the response
+		var openAIResp models.OpenAIModelResponse
+		if err := json.NewDecoder(respBodyReader).Decode(&openAIResp); err != nil {
+			logger.Printf("Error decoding response: %v\n", err)
+			return getHardcodedOpenAIModels(), nil
+		}
+
+		logger.Printf("Decoded %d models from API\n", len(openAIResp.Data))
+
+		// Convert OpenAI models to our internal model format
+		result := make([]models.Model, 0, len(openAIResp.Data))
+		for _, m := range openAIResp.Data {
+			logger.Printf("Processing model: %s\n", m.ID)
+			model := models.Model{
+				Name: m.ID,
 				Details: struct {
 					Family  string `json:"family"`
 					Format  string `json:"format"`
 					Context int    `json:"context"`
 				}{
-					Family:  "GPT-3.5",
+					Family:  "OpenAI",
 					Format:  "Chat",
-					Context: 4096,
+					Context: 4096, // Default context size
 				},
-			},
-			{
-				Name: "gpt-4",
-				Details: struct {
-					Family  string `json:"family"`
-					Format  string `json:"format"`
-					Context int    `json:"context"`
-				}{
-					Family:  "GPT-4",
-					Format:  "Chat",
-					Context: 8192,
-				},
-			},
-			{
-				Name: "gpt-4-turbo",
-				Details: struct {
-					Family  string `json:"family"`
-					Format  string `json:"format"`
-					Context int    `json:"context"`
-				}{
-					Family:  "GPT-4",
-					Format:  "Chat",
-					Context: 128000,
-				},
-			},
-		}, nil
+			}
+			result = append(result, model)
+		}
+
+		// Ensure we have at least some models
+		if len(result) == 0 {
+			logger.Println("No models found in API response, using hardcoded models")
+			return getHardcodedOpenAIModels(), nil
+		}
+
+		logger.Printf("Returning %d models from API\n", len(result))
+		return result, nil
 	}
 
 	// For Ollama, use the existing implementation
@@ -104,6 +172,48 @@ func (c *Client) FetchModels() ([]models.Model, error) {
 	}
 
 	return modelList.Models, nil
+}
+
+// getHardcodedOpenAIModels returns a list of hardcoded OpenAI models
+func getHardcodedOpenAIModels() []models.Model {
+	return []models.Model{
+		{
+			Name: "gpt-3.5-turbo",
+			Details: struct {
+				Family  string `json:"family"`
+				Format  string `json:"format"`
+				Context int    `json:"context"`
+			}{
+				Family:  "GPT-3.5",
+				Format:  "Chat",
+				Context: 4096,
+			},
+		},
+		{
+			Name: "gpt-4",
+			Details: struct {
+				Family  string `json:"family"`
+				Format  string `json:"format"`
+				Context int    `json:"context"`
+			}{
+				Family:  "GPT-4",
+				Format:  "Chat",
+				Context: 8192,
+			},
+		},
+		{
+			Name: "gpt-4-turbo",
+			Details: struct {
+				Family  string `json:"family"`
+				Format  string `json:"format"`
+				Context int    `json:"context"`
+			}{
+				Family:  "GPT-4",
+				Format:  "Chat",
+				Context: 128000,
+			},
+		},
+	}
 }
 
 // ClearContext clears the conversation context

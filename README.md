@@ -2,8 +2,6 @@
 
 A terminal user interface (TUI) for interacting with Ollama models, built with Go and the Charm libraries.
 
-![Ollama TUI Screenshot](https://github.com/evilvic/ollama-tui/raw/main/screenshots/ollama-tui-demo.png)
-
 ## Features
 
 - Browse and select from available Ollama models

@@ -17,6 +17,20 @@ type ModelListResponse struct {
 	Models []Model `json:"models"`
 }
 
+// OpenAIModelResponse represents the response from the OpenAI API for listing models
+type OpenAIModelResponse struct {
+	Data   []OpenAIModel `json:"data"`
+	Object string        `json:"object"`
+}
+
+// OpenAIModel represents a model from the OpenAI API
+type OpenAIModel struct {
+	ID      string `json:"id"`
+	Object  string `json:"object"`
+	Created int    `json:"created"`
+	OwnedBy string `json:"owned_by"`
+}
+
 // GenerateRequest represents a request to generate text from a model
 type GenerateRequest struct {
 	Model    string        `json:"model"`
