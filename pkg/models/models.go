@@ -31,6 +31,53 @@ type OpenAIModel struct {
 	OwnedBy string `json:"owned_by"`
 }
 
+// OpenAIChatRequest represents a request to the OpenAI chat completions API
+type OpenAIChatRequest struct {
+	Model       string        `json:"model"`
+	Messages    []ChatMessage `json:"messages"`
+	Stream      bool          `json:"stream"`
+	Temperature float64       `json:"temperature,omitempty"`
+	MaxTokens   int           `json:"max_tokens,omitempty"`
+}
+
+// OpenAIChatResponse represents a response from the OpenAI chat completions API
+type OpenAIChatResponse struct {
+	ID      string   `json:"id"`
+	Object  string   `json:"object"`
+	Created int64    `json:"created"`
+	Model   string   `json:"model"`
+	Choices []Choice `json:"choices"`
+}
+
+// OpenAIChatStreamResponse represents a streaming response from the OpenAI chat completions API
+type OpenAIChatStreamResponse struct {
+	ID      string         `json:"id"`
+	Object  string         `json:"object"`
+	Created int64          `json:"created"`
+	Model   string         `json:"model"`
+	Choices []StreamChoice `json:"choices"`
+}
+
+// Choice represents a choice in an OpenAI chat completion response
+type Choice struct {
+	Index        int         `json:"index"`
+	Message      ChatMessage `json:"message"`
+	FinishReason string      `json:"finish_reason"`
+}
+
+// StreamChoice represents a choice in an OpenAI streaming chat completion response
+type StreamChoice struct {
+	Index        int     `json:"index"`
+	Delta        Delta   `json:"delta"`
+	FinishReason *string `json:"finish_reason"`
+}
+
+// Delta represents the delta in a streaming response
+type Delta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
 // GenerateRequest represents a request to generate text from a model
 type GenerateRequest struct {
 	Model    string        `json:"model"`

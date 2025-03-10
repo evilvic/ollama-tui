@@ -26,6 +26,9 @@ type Client struct {
 	APIKey  string
 	client  *http.Client
 	context []int
+
+	// OpenAI conversation history
+	openAIMessages []models.ChatMessage
 }
 
 func NewClient(provider string, apiKey string) *Client {
@@ -40,9 +43,10 @@ func NewClient(provider string, apiKey string) *Client {
 	}
 
 	return &Client{
-		BaseURL: baseURL,
-		APIKey:  apiKey,
-		client:  &http.Client{},
+		BaseURL:        baseURL,
+		APIKey:         apiKey,
+		client:         &http.Client{},
+		openAIMessages: []models.ChatMessage{},
 	}
 }
 
@@ -219,15 +223,31 @@ func getHardcodedOpenAIModels() []models.Model {
 // ClearContext clears the conversation context
 func (c *Client) ClearContext() {
 	c.context = nil
+	c.openAIMessages = nil
 }
 
 // HasContext returns true if the client has a conversation context
 func (c *Client) HasContext() bool {
-	return c.context != nil && len(c.context) > 0
+	return (c.context != nil && len(c.context) > 0) || (c.openAIMessages != nil && len(c.openAIMessages) > 0)
 }
 
 // GenerateResponse generates a response from a model
 func (c *Client) GenerateResponse(ctx context.Context, model, prompt string, callback func(string, bool)) error {
+	// Create a log file for debugging
+	logFile, err := os.OpenFile("api_response.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err == nil {
+		defer logFile.Close()
+		logger := log.New(logFile, "", log.LstdFlags)
+		logger.Printf("Generating response for model: %s, prompt: %s\n", model, prompt)
+		logger.Printf("Using provider: %s\n", c.BaseURL)
+	}
+
+	// Handle OpenAI API
+	if c.BaseURL == DefaultOpenAIURL {
+		return c.generateOpenAIResponse(ctx, model, prompt, callback)
+	}
+
+	// Handle Ollama API (existing implementation)
 	// Create the request with context if available
 	reqBody, err := json.Marshal(models.GenerateRequest{
 		Model:   model,
@@ -299,4 +319,210 @@ func (c *Client) GenerateResponse(ctx context.Context, model, prompt string, cal
 
 	callback("", true)
 	return nil
+}
+
+// generateOpenAIResponse generates a response using the OpenAI API
+func (c *Client) generateOpenAIResponse(ctx context.Context, model, prompt string, callback func(string, bool)) error {
+	// Create a log file for debugging
+	logFile, err := os.OpenFile("openai_chat.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err == nil {
+		defer logFile.Close()
+		logger := log.New(logFile, "", log.LstdFlags)
+		logger.Printf("Generating OpenAI response for model: %s, prompt: %s\n", model, prompt)
+		logger.Printf("Conversation history: %d messages\n", len(c.openAIMessages))
+	}
+
+	// Create a logger function for convenience
+	logMessage := func(format string, args ...interface{}) {
+		if logFile != nil {
+			logger := log.New(logFile, "", log.LstdFlags)
+			logger.Printf(format, args...)
+		}
+	}
+
+	// Create messages array
+	var messages []models.ChatMessage
+
+	// If we have conversation history, use it
+	if c.openAIMessages != nil && len(c.openAIMessages) > 0 {
+		messages = append(messages, c.openAIMessages...)
+	}
+
+	// Add the new user message
+	userMessage := models.ChatMessage{
+		Role:    "user",
+		Content: prompt,
+	}
+	messages = append(messages, userMessage)
+
+	// Create the request
+	chatReq := models.OpenAIChatRequest{
+		Model:       model,
+		Messages:    messages,
+		Stream:      true,
+		Temperature: 0.7,
+	}
+
+	// Marshal the request to JSON
+	reqBody, err := json.Marshal(chatReq)
+	if err != nil {
+		logMessage("Error marshaling request: %v", err)
+		return fmt.Errorf("failed to marshal OpenAI request: %w", err)
+	}
+
+	logMessage("Request body: %s", string(reqBody))
+
+	// Create the HTTP request - Fix the URL by using the correct path
+	chatCompletionsURL := c.BaseURL + "/chat/completions"
+	logMessage("Using URL: %s", chatCompletionsURL)
+
+	req, err := http.NewRequestWithContext(ctx, "POST", chatCompletionsURL, bytes.NewBuffer(reqBody))
+	if err != nil {
+		logMessage("Error creating request: %v", err)
+		return fmt.Errorf("failed to create OpenAI request: %w", err)
+	}
+
+	// Set headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+
+	logMessage("Sending request to %s with API key length: %d", chatCompletionsURL, len(c.APIKey))
+
+	// Send the request
+	resp, err := c.client.Do(req)
+	if err != nil {
+		logMessage("Error sending request: %v", err)
+		return fmt.Errorf("failed to send OpenAI request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	logMessage("Response status code: %d", resp.StatusCode)
+
+	// Check for error status codes
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		logMessage("Error response body: %s", string(bodyBytes))
+		return fmt.Errorf("OpenAI API returned status code %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	// Process the streaming response
+	reader := bufio.NewReader(resp.Body)
+
+	// Store the assistant's response
+	var assistantResponse strings.Builder
+
+	logMessage("Starting to read response stream")
+
+	for {
+		select {
+		case <-ctx.Done():
+			logMessage("Context cancelled")
+			callback("", true)
+			return nil
+		default:
+			// Read a line from the response
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				if err == io.EOF {
+					logMessage("End of response stream (EOF)")
+					// Add the assistant's message to the conversation history
+					if assistantResponse.Len() > 0 {
+						c.openAIMessages = append(c.openAIMessages, userMessage)
+						c.openAIMessages = append(c.openAIMessages, models.ChatMessage{
+							Role:    "assistant",
+							Content: assistantResponse.String(),
+						})
+						logMessage("Added conversation history. Total messages: %d", len(c.openAIMessages))
+					} else {
+						logMessage("No assistant response received")
+					}
+					callback("", true)
+					return nil
+				}
+				logMessage("Error reading response: %v", err)
+				return fmt.Errorf("error reading OpenAI response: %w", err)
+			}
+
+			logMessage("Received line: %s", line)
+
+			// Skip empty lines and "data: [DONE]"
+			line = strings.TrimSpace(line)
+			if line == "" {
+				logMessage("Empty line, skipping")
+				continue
+			}
+
+			if line == "data: [DONE]" {
+				logMessage("Received DONE signal")
+				// If we're done, add the messages to the conversation history
+				if assistantResponse.Len() > 0 {
+					c.openAIMessages = append(c.openAIMessages, userMessage)
+					c.openAIMessages = append(c.openAIMessages, models.ChatMessage{
+						Role:    "assistant",
+						Content: assistantResponse.String(),
+					})
+					logMessage("Added conversation history. Total messages: %d", len(c.openAIMessages))
+				} else {
+					logMessage("No assistant response received at DONE signal")
+				}
+				callback("", true)
+				return nil
+			}
+
+			// Remove "data: " prefix
+			if strings.HasPrefix(line, "data: ") {
+				line = strings.TrimPrefix(line, "data: ")
+				logMessage("Trimmed data prefix: %s", line)
+			} else {
+				logMessage("Line doesn't have data prefix, skipping: %s", line)
+				continue
+			}
+
+			// Parse the JSON
+			var streamResp models.OpenAIChatStreamResponse
+			if err := json.Unmarshal([]byte(line), &streamResp); err != nil {
+				logMessage("Error parsing JSON: %v, line: %s", err, line)
+				continue
+			}
+
+			logMessage("Parsed stream response: %+v", streamResp)
+
+			// Process the choices
+			if len(streamResp.Choices) > 0 {
+				choice := streamResp.Choices[0]
+				logMessage("Processing choice: %+v", choice)
+
+				// Check if this is the end of the response
+				if choice.FinishReason != nil {
+					logMessage("Finish reason: %v", *choice.FinishReason)
+					// Add the assistant's message to the conversation history
+					if assistantResponse.Len() > 0 {
+						c.openAIMessages = append(c.openAIMessages, userMessage)
+						c.openAIMessages = append(c.openAIMessages, models.ChatMessage{
+							Role:    "assistant",
+							Content: assistantResponse.String(),
+						})
+						logMessage("Added conversation history. Total messages: %d", len(c.openAIMessages))
+					} else {
+						logMessage("No assistant response received at finish")
+					}
+					callback("", true)
+					return nil
+				}
+
+				// Send the content
+				if choice.Delta.Content != "" {
+					logMessage("Delta content: %s", choice.Delta.Content)
+					assistantResponse.WriteString(choice.Delta.Content)
+					callback(choice.Delta.Content, false)
+				} else if choice.Delta.Role != "" {
+					logMessage("Delta role: %s", choice.Delta.Role)
+				} else {
+					logMessage("Empty delta")
+				}
+			} else {
+				logMessage("No choices in response")
+			}
+		}
+	}
 }
